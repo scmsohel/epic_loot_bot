@@ -330,7 +330,9 @@ def main():
 
     updater.start_polling()
     print("✅ EpicLootBot running with admin stats + channel lock")
-    updater.idle()
+    # ⚠️ Do NOT call updater.idle() on Render (background thread)
+    while True:
+        pass
 
 
 if __name__ == "__main__":
