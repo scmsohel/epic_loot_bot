@@ -4,17 +4,20 @@ import requests
 from datetime import datetime, timedelta, timezone
 
 from dotenv import load_dotenv
+
 from telegram import (
+    Bot,
     Update,
     InlineKeyboardButton,
     InlineKeyboardMarkup
 )
+
 from telegram.ext import (
-    Updater,
+    Dispatcher,
     CommandHandler,
-    CallbackContext,
     CallbackQueryHandler
 )
+
 
 # ================= ENV =================
 load_dotenv()
@@ -313,9 +316,8 @@ def button_handler(update: Update, context: CallbackContext):
 
 
 # ---------- MAIN ----------
-def main():
-    updater = Updater(BOT_TOKEN, use_context=True)
-    dp = updater.dispatcher
+def setup_dispatcher(bot):
+    dp = Dispatcher(bot, None, workers=0, use_context=True)
 
     dp.add_handler(CommandHandler("start", start))
     dp.add_handler(CommandHandler("status", status))
@@ -327,12 +329,7 @@ def main():
     dp.add_handler(CommandHandler("unsub_user", unsub_user))
 
     dp.add_handler(CallbackQueryHandler(button_handler))
-
-    updater.start_polling(drop_pending_updates=True)
-    print("✅ EpicLootBot running with admin stats + channel lock")
-    # ⚠️ Do NOT call updater.idle() on Render (background thread)
-    while True:
-        pass
+    return dp
 
 
 if __name__ == "__main__":
