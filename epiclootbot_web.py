@@ -1,20 +1,25 @@
-import threading
-from flask import Flask
+import os
+from flask import Flask, request
+from telegram import Bot, Update
 import epiclootbot
 
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "epiclootbot")
+
+bot = Bot(token=BOT_TOKEN)
+dispatcher = epiclootbot.setup_dispatcher(bot)
+
 app = Flask(__name__)
-bot_started = False
 
 @app.route("/")
 def home():
-    return "EpicLootBot is running"
+    return "EpicLootBot webhook is running"
 
-def run_bot_once():
-    global bot_started
-    if not bot_started:
-        bot_started = True
-        epiclootbot.main()
+@app.route(f"/webhook/{WEBHOOK_SECRET}", methods=["POST"])
+def webhook():
+    update = Update.de_json(request.get_json(force=True), bot)
+    dispatcher.process_update(update)
+    return "OK"
 
 if __name__ == "__main__":
-    threading.Thread(target=run_bot_once, daemon=True).start()
     app.run(host="0.0.0.0", port=10000)
