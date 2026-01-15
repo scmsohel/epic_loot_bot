@@ -15,7 +15,8 @@ from telegram import (
 from telegram.ext import (
     Dispatcher,
     CommandHandler,
-    CallbackQueryHandler
+    CallbackQueryHandler,
+    CallbackContext
 )
 
 
