@@ -328,7 +328,7 @@ def main():
 
     dp.add_handler(CallbackQueryHandler(button_handler))
 
-    updater.start_polling()
+    updater.start_polling(drop_pending_updates=True)
     print("✅ EpicLootBot running with admin stats + channel lock")
     # ⚠️ Do NOT call updater.idle() on Render (background thread)
     while True:
