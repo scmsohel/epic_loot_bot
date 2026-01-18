@@ -25,7 +25,7 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME")
 CHANNEL_URL = os.getenv("CHANNEL_URL")
-ADMIN_ID = os.getenv("ADMIN_ID")
+ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN missing")
@@ -33,8 +33,6 @@ if not CHANNEL_USERNAME or not CHANNEL_URL:
     raise RuntimeError("CHANNEL config missing")
 if not ADMIN_ID:
     raise RuntimeError("ADMIN_ID missing")
-
-ADMIN_ID = int(ADMIN_ID)
 
 # ================= CONFIG =================
 EPIC_URL = "https://store-site-backend-static.ak.epicgames.com/freeGamesPromotions"
@@ -79,27 +77,41 @@ def to_bd(iso):
 def fmt(dt):
     return dt.strftime("%b %d, %I:%M %p")
 
+def date_only(dt):
+    return dt.strftime("%b %d")
+
 # ================= EPIC FETCH =================
-def fetch_free_games():
+def fetch_epic_data():
     r = requests.get(EPIC_URL, params=params, timeout=20)
     games = r.json()["data"]["Catalog"]["searchStore"]["elements"]
 
-    free_now = []
+    free_now, coming_soon = [], []
 
     for g in games:
         promo = g.get("promotions")
         if not promo:
             continue
 
+        title = g["title"]
+
         for p in promo.get("promotionalOffers", []):
             offer = p["promotionalOffers"][0]
             if offer["discountSetting"]["discountPercentage"] == 0:
                 free_now.append({
-                    "title": g["title"],
+                    "title": title,
                     "end": to_bd(offer["endDate"])
                 })
 
-    return free_now
+        for p in promo.get("upcomingPromotionalOffers", []):
+            offer = p["promotionalOffers"][0]
+            coming_soon.append({
+                "title": title,
+                "start": to_bd(offer["startDate"]),
+                "end": to_bd(offer["endDate"])
+            })
+
+    coming_soon.sort(key=lambda x: x["start"])
+    return free_now, coming_soon
 
 # ================= CHANNEL CHECK =================
 def is_joined(bot, user_id):
@@ -161,10 +173,29 @@ def start(update: Update, context: CallbackContext):
 
     update.message.reply_text(
         "👋 Welcome to *EpicLootBot* 🎮\n\n"
-        "You will get auto alerts when new FREE games unlock.",
+        "New FREE games unlock হলে auto alert পাবে।",
         reply_markup=sub_keyboard(update.message.chat_id),
         parse_mode="Markdown"
     )
+
+@guarded
+def status(update: Update, context: CallbackContext):
+    free_now, coming_soon = fetch_epic_data()
+    msg = ""
+
+    if free_now:
+        msg += "🎮 FREE GAMES NOW\n"
+        for g in free_now:
+            msg += f"\n• *{g['title']}*\n"
+            msg += f"  ⏰ _Free now — until {fmt(g['end'])}_\n"
+
+    if coming_soon:
+        msg += "\n⏳ COMING SOON\n"
+        for g in coming_soon:
+            msg += f"\n• *{g['title']}*\n"
+            msg += f"  🗓 _Free {date_only(g['start'])} → {date_only(g['end'])}_\n"
+
+    update.message.reply_text(msg.strip(), parse_mode="Markdown")
 
 @guarded
 def subscribe(update: Update, context: CallbackContext):
@@ -172,7 +203,7 @@ def subscribe(update: Update, context: CallbackContext):
     subs.add(update.message.chat_id)
     save_set(SUB_FILE, subs)
     update.message.reply_text(
-        "✅ Subscribed! You will receive auto alerts.",
+        "✅ Subscribed! Auto announce পাবে।",
         reply_markup=sub_keyboard(update.message.chat_id),
         parse_mode="Markdown"
     )
@@ -183,12 +214,12 @@ def unsubscribe(update: Update, context: CallbackContext):
     subs.discard(update.message.chat_id)
     save_set(SUB_FILE, subs)
     update.message.reply_text(
-        "🔕 Unsubscribed. Alerts stopped.",
+        "🔕 Unsubscribed. আর alert যাবে না।",
         reply_markup=sub_keyboard(update.message.chat_id),
         parse_mode="Markdown"
     )
 
-# ================= ADMIN: /user =================
+# ================= ADMIN =================
 @guarded
 def user_stats(update: Update, context: CallbackContext):
     if not is_admin(update.effective_user.id):
@@ -197,27 +228,21 @@ def user_stats(update: Update, context: CallbackContext):
     all_users = load_set(ALL_USER_FILE)
     subs = load_set(SUB_FILE)
 
-    total = len(all_users)
-    subscribed = len(subs)
-    unsubscribed = total - subscribed
-
     msg = (
         "👥 *USER STATS*\n\n"
-        f"• Total Users: *{total}*\n"
-        f"• Subscribed Users: *{subscribed}*\n"
-        f"• Unsubscribed Users: *{unsubscribed}*"
+        f"• Total Users: *{len(all_users)}*\n"
+        f"• Subscribed Users: *{len(subs)}*\n"
+        f"• Unsubscribed Users: *{len(all_users - subs)}*"
     )
-
     update.message.reply_text(msg, parse_mode="Markdown")
 
-# ================= ADMIN: /broadcast =================
 @guarded
 def broadcast(update: Update, context: CallbackContext):
     if not is_admin(update.effective_user.id):
         return
 
     if not context.args:
-        update.message.reply_text("❌ Usage:\n/broadcast your message")
+        update.message.reply_text("Usage:\n/broadcast your message")
         return
 
     message = "📢 *ADMIN NOTICE*\n\n" + " ".join(context.args)
@@ -261,8 +286,8 @@ def button_handler(update: Update, context: CallbackContext):
 def auto_announce(bot: Bot):
     while True:
         try:
-            free_games = fetch_free_games()
-            titles = [g["title"] for g in free_games]
+            free_now, _ = fetch_epic_data()
+            titles = [g["title"] for g in free_now]
 
             old_titles = load_state()
             new_titles = [t for t in titles if t not in old_titles]
@@ -270,7 +295,7 @@ def auto_announce(bot: Bot):
             if new_titles:
                 subs = load_set(SUB_FILE)
 
-                for g in free_games:
+                for g in free_now:
                     if g["title"] in new_titles:
                         msg = (
                             "🎉 *NEW FREE GAME UNLOCKED!*\n\n"
@@ -295,6 +320,7 @@ def setup_dispatcher(bot):
     dp = Dispatcher(bot, None, workers=1, use_context=True)
 
     dp.add_handler(CommandHandler("start", start))
+    dp.add_handler(CommandHandler("status", status))
     dp.add_handler(CommandHandler("subscribe", subscribe))
     dp.add_handler(CommandHandler("unsubscribe", unsubscribe))
     dp.add_handler(CommandHandler("user", user_stats))
