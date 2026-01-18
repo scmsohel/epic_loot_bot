@@ -1,14 +1,22 @@
-import os, json, time, threading, requests
+import os
+import json
+import time
+import threading
+import requests
 from datetime import datetime, timedelta, timezone
-from dotenv import load_dotenv
 
+from dotenv import load_dotenv
 from telegram import (
-    Bot, Update,
-    InlineKeyboardButton, InlineKeyboardMarkup
+    Bot,
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup
 )
 from telegram.ext import (
-    Dispatcher, CommandHandler,
-    CallbackQueryHandler, CallbackContext
+    Dispatcher,
+    CommandHandler,
+    CallbackQueryHandler,
+    CallbackContext
 )
 
 # ================= ENV =================
@@ -19,15 +27,19 @@ CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME")
 CHANNEL_URL = os.getenv("CHANNEL_URL")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
-if not BOT_TOKEN or not CHANNEL_USERNAME or not CHANNEL_URL or not ADMIN_ID:
-    raise RuntimeError("Missing ENV values")
+if not BOT_TOKEN:
+    raise RuntimeError("BOT_TOKEN missing")
+if not CHANNEL_USERNAME or not CHANNEL_URL:
+    raise RuntimeError("CHANNEL config missing")
+if not ADMIN_ID:
+    raise RuntimeError("ADMIN_ID missing")
 
 # ================= CONFIG =================
 EPIC_URL = "https://store-site-backend-static.ak.epicgames.com/freeGamesPromotions"
 
 SUB_FILE = "subscribers.json"
-USER_FILE = "all_users.json"
 STATE_FILE = "last_state.json"
+ALL_USER_FILE = "all_users.json"
 
 params = {
     "locale": "en-US",
@@ -37,7 +49,7 @@ params = {
 
 BD_TZ = timezone(timedelta(hours=6))
 
-# ================= JSON =================
+# ================= JSON HELPERS =================
 def load_set(path):
     if not os.path.exists(path):
         return set()
@@ -54,9 +66,9 @@ def load_state():
     with open(STATE_FILE, "r") as f:
         return json.load(f)
 
-def save_state(data):
+def save_state(titles):
     with open(STATE_FILE, "w") as f:
-        json.dump(data, f)
+        json.dump(titles, f)
 
 # ================= TIME =================
 def to_bd(iso):
@@ -68,14 +80,14 @@ def fmt(dt):
 def date_only(dt):
     return dt.strftime("%b %d")
 
-# ================= EPIC =================
-def fetch_epic():
+# ================= EPIC FETCH =================
+def fetch_epic_data():
     r = requests.get(EPIC_URL, params=params, timeout=20)
-    items = r.json()["data"]["Catalog"]["searchStore"]["elements"]
+    games = r.json()["data"]["Catalog"]["searchStore"]["elements"]
 
-    free_now, coming = [], []
+    free_now, coming_soon = [], []
 
-    for g in items:
+    for g in games:
         promo = g.get("promotions")
         if not promo:
             continue
@@ -83,25 +95,25 @@ def fetch_epic():
         title = g["title"]
 
         for p in promo.get("promotionalOffers", []):
-            o = p["promotionalOffers"][0]
-            if o["discountSetting"]["discountPercentage"] == 0:
+            offer = p["promotionalOffers"][0]
+            if offer["discountSetting"]["discountPercentage"] == 0:
                 free_now.append({
                     "title": title,
-                    "end": to_bd(o["endDate"])
+                    "end": to_bd(offer["endDate"])
                 })
 
         for p in promo.get("upcomingPromotionalOffers", []):
-            o = p["promotionalOffers"][0]
-            coming.append({
+            offer = p["promotionalOffers"][0]
+            coming_soon.append({
                 "title": title,
-                "start": to_bd(o["startDate"]),
-                "end": to_bd(o["endDate"])
+                "start": to_bd(offer["startDate"]),
+                "end": to_bd(offer["endDate"])
             })
 
-    coming.sort(key=lambda x: x["start"])
-    return free_now, coming
+    coming_soon.sort(key=lambda x: x["start"])
+    return free_now, coming_soon
 
-# ================= CHANNEL =================
+# ================= CHANNEL CHECK =================
 def is_joined(bot, user_id):
     try:
         m = bot.get_chat_member(CHANNEL_USERNAME, user_id)
@@ -115,7 +127,7 @@ def join_keyboard():
         [InlineKeyboardButton("✅ Verify", callback_data="VERIFY_JOIN")]
     ])
 
-def join_warning(update, edit=False):
+def send_join_warning(update, context, edit=False):
     text = (
         "🚫 *Access Restricted*\n\n"
         "Please join our channel to use this bot."
@@ -133,55 +145,55 @@ def join_warning(update, edit=False):
 def guarded(func):
     def wrapper(update: Update, context: CallbackContext):
         if not is_joined(context.bot, update.effective_user.id):
-            join_warning(update)
+            send_join_warning(update, context)
             return
         return func(update, context)
     return wrapper
 
-def is_admin(uid):
-    return uid == ADMIN_ID
+def is_admin(user_id):
+    return user_id == ADMIN_ID
 
-# ================= SUB =================
+# ================= SUBSCRIBE =================
 def sub_keyboard(chat_id):
     subs = load_set(SUB_FILE)
     if chat_id in subs:
-        return InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔕 Unsubscribe", callback_data="UNSUB")]
-        ])
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔔 Subscribe", callback_data="SUB")]
-    ])
+        return InlineKeyboardMarkup(
+            [[InlineKeyboardButton("🔕 Unsubscribe", callback_data="UNSUB")]]
+        )
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton("🔔 Subscribe", callback_data="SUB")]]
+    )
 
 # ================= COMMANDS =================
 @guarded
 def start(update: Update, context: CallbackContext):
-    users = load_set(USER_FILE)
+    users = load_set(ALL_USER_FILE)
     users.add(update.message.chat_id)
-    save_set(USER_FILE, users)
+    save_set(ALL_USER_FILE, users)
 
     update.message.reply_text(
         "👋 Welcome to *EpicLootBot* 🎮\n\n"
-        "New FREE game unlock হলেই auto announce পাবে।",
+        "New FREE games unlock হলে auto alert পাবে।",
         reply_markup=sub_keyboard(update.message.chat_id),
         parse_mode="Markdown"
     )
 
 @guarded
 def status(update: Update, context: CallbackContext):
-    free_now, coming = fetch_epic()
+    free_now, coming_soon = fetch_epic_data()
     msg = ""
 
     if free_now:
-        msg += "🎮 FREE GAMES NOW\n\n"
+        msg += "🎮 FREE GAMES NOW\n"
         for g in free_now:
-            msg += f"• *{g['title']}*\n"
-            msg += f"  ⏰ _Until {fmt(g['end'])}_\n\n"
+            msg += f"\n• *{g['title']}*\n"
+            msg += f"  ⏰ _Free now — until {fmt(g['end'])}_\n"
 
-    if coming:
-        msg += "⏳ COMING SOON\n\n"
-        for g in coming:
-            msg += f"• *{g['title']}*\n"
-            msg += f"  🗓 _{date_only(g['start'])} → {date_only(g['end'])}_\n\n"
+    if coming_soon:
+        msg += "\n⏳ COMING SOON\n"
+        for g in coming_soon:
+            msg += f"\n• *{g['title']}*\n"
+            msg += f"  🗓 _Free {date_only(g['start'])} → {date_only(g['end'])}_\n"
 
     update.message.reply_text(msg.strip(), parse_mode="Markdown")
 
@@ -202,45 +214,49 @@ def unsubscribe(update: Update, context: CallbackContext):
     subs.discard(update.message.chat_id)
     save_set(SUB_FILE, subs)
     update.message.reply_text(
-        "🔕 Unsubscribed.",
+        "🔕 Unsubscribed. আর alert যাবে না।",
         reply_markup=sub_keyboard(update.message.chat_id),
         parse_mode="Markdown"
     )
 
+# ================= ADMIN =================
 @guarded
 def user_stats(update: Update, context: CallbackContext):
     if not is_admin(update.effective_user.id):
         return
-    users = load_set(USER_FILE)
+
+    all_users = load_set(ALL_USER_FILE)
     subs = load_set(SUB_FILE)
-    update.message.reply_text(
-        f"👥 *USER STATS*\n\n"
-        f"Total: *{len(users)}*\n"
-        f"Subscribed: *{len(subs)}*\n"
-        f"Unsubscribed: *{len(users - subs)}*",
-        parse_mode="Markdown"
+
+    msg = (
+        "👥 *USER STATS*\n\n"
+        f"• Total Users: *{len(all_users)}*\n"
+        f"• Subscribed Users: *{len(subs)}*\n"
+        f"• Unsubscribed Users: *{len(all_users - subs)}*"
     )
+    update.message.reply_text(msg, parse_mode="Markdown")
 
 @guarded
 def broadcast(update: Update, context: CallbackContext):
     if not is_admin(update.effective_user.id):
         return
+
     if not context.args:
-        update.message.reply_text("Usage:\n/broadcast message")
+        update.message.reply_text("Usage:\n/broadcast your message")
         return
 
-    msg = "📢 *ADMIN NOTICE*\n\n" + " ".join(context.args)
-    users = load_set(USER_FILE)
+    message = "📢 *ADMIN NOTICE*\n\n" + " ".join(context.args)
+    users = load_set(ALL_USER_FILE)
 
     sent = 0
     for uid in users:
         try:
-            context.bot.send_message(uid, msg, parse_mode="Markdown")
+            context.bot.send_message(uid, message, parse_mode="Markdown")
             sent += 1
         except:
             pass
 
-    update.message.reply_text(f"✅ Sent to {sent} users.")
+    update.message.reply_text(f"✅ Broadcast sent to {sent} users.")
 
 # ================= BUTTON =================
 def button_handler(update: Update, context: CallbackContext):
@@ -248,7 +264,7 @@ def button_handler(update: Update, context: CallbackContext):
     chat_id = q.message.chat_id
 
     if not is_joined(context.bot, q.from_user.id):
-        q.answer("Join channel first!", show_alert=True)
+        q.answer("Join channel first", show_alert=True)
         q.edit_message_reply_markup(reply_markup=join_keyboard())
         return
 
@@ -270,20 +286,21 @@ def button_handler(update: Update, context: CallbackContext):
 def auto_announce(bot: Bot):
     while True:
         try:
-            free_now, _ = fetch_epic()
+            free_now, _ = fetch_epic_data()
             titles = [g["title"] for g in free_now]
 
-            old = load_state()
-            new = [t for t in titles if t not in old]
+            old_titles = load_state()
+            new_titles = [t for t in titles if t not in old_titles]
 
-            if new:
+            if new_titles:
                 subs = load_set(SUB_FILE)
+
                 for g in free_now:
-                    if g["title"] in new:
+                    if g["title"] in new_titles:
                         msg = (
                             "🎉 *NEW FREE GAME UNLOCKED!*\n\n"
                             f"🎮 *{g['title']}*\n"
-                            f"⏰ _Until {fmt(g['end'])}_"
+                            f"⏰ _Free now — until {fmt(g['end'])}_"
                         )
                         for uid in subs:
                             try:
@@ -296,11 +313,10 @@ def auto_announce(bot: Bot):
         except Exception as e:
             print("Auto announce error:", e)
 
-        time.sleep(120)
+        time.sleep(90)
 
-# ================= START =================
-def start_bot():
-    bot = Bot(BOT_TOKEN)
+# ================= DISPATCHER =================
+def setup_dispatcher(bot):
     dp = Dispatcher(bot, None, workers=1, use_context=True)
 
     dp.add_handler(CommandHandler("start", start))
@@ -311,18 +327,17 @@ def start_bot():
     dp.add_handler(CommandHandler("broadcast", broadcast))
     dp.add_handler(CallbackQueryHandler(button_handler))
 
-    threading.Thread(
-        target=auto_announce,
-        args=(bot,),
-        daemon=True
-    ).start()
+    return dp
 
-    offset = 0
+# ================= START =================
+def start_bot():
+    bot = Bot(BOT_TOKEN)
+    dp = setup_dispatcher(bot)
+
+    threading.Thread(target=auto_announce, args=(bot,), daemon=True).start()
+
     while True:
-        updates = bot.get_updates(offset=offset, timeout=30)
-        for u in updates:
-            dp.process_update(u)
-            offset = u.update_id + 1
+        time.sleep(1)
 
 if __name__ == "__main__":
     start_bot()
