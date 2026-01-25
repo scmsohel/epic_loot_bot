@@ -287,33 +287,41 @@ def auto_announce(bot: Bot):
     while True:
         try:
             free_now, _ = fetch_epic_data()
-            titles = [g["title"] for g in free_now]
+            titles = sorted([g["title"] for g in free_now])
 
-            old_titles = load_state()
+            old_titles = sorted(load_state())
+
+            # If no change, do nothing
+            if titles == old_titles:
+                time.sleep(90)
+                continue
+
+            subs = load_set(SUB_FILE)
+
+            # Find newly added games
             new_titles = [t for t in titles if t not in old_titles]
 
-            if new_titles:
-                subs = load_set(SUB_FILE)
+            for g in free_now:
+                if g["title"] in new_titles:
+                    msg = (
+                        "🎉 *NEW FREE GAME UNLOCKED!*\n\n"
+                        f"🎮 *{g['title']}*\n"
+                        f"⏰ _Free now — until {fmt(g['end'])}_"
+                    )
+                    for uid in subs:
+                        try:
+                            bot.send_message(uid, msg, parse_mode="Markdown")
+                        except:
+                            pass
 
-                for g in free_now:
-                    if g["title"] in new_titles:
-                        msg = (
-                            "🎉 *NEW FREE GAME UNLOCKED!*\n\n"
-                            f"🎮 *{g['title']}*\n"
-                            f"⏰ _Free now — until {fmt(g['end'])}_"
-                        )
-                        for uid in subs:
-                            try:
-                                bot.send_message(uid, msg, parse_mode="Markdown")
-                            except:
-                                pass
-
-                save_state(titles)
+            # Always update state on any change
+            save_state(titles)
 
         except Exception as e:
             print("Auto announce error:", e)
 
         time.sleep(90)
+
 
 # ================= DISPATCHER =================
 def setup_dispatcher(bot):
